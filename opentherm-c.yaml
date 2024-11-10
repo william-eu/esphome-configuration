@@ -1,0 +1,453 @@
+substitutions:
+  devicename: "opentherm-c"
+  upper_devicename: Opentherm
+
+esphome:
+  name: $devicename
+  platform: ESP8266
+  board: d1_mini
+  platformio_options:
+    lib_deps:
+    - ihormelnyk/OpenTherm Library @ 1.1.4
+  includes:
+    - esphome-opentherm
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+web_server:
+  include_internal: true
+  version: 2
+
+captive_portal:
+
+logger:
+  level: WARN
+  logs:
+    component: ERROR
+
+
+api:
+ota:
+  - platform: esphome
+
+custom_component:
+  - lambda: |-
+      auto opentherm = new OpenthermComponent();
+      return {opentherm};
+    components:
+      - id: opentherm
+
+output:
+  - platform: custom
+    type: float
+    lambda: |-
+      OpenthermComponent *openthermComp = (OpenthermComponent*) id(opentherm);
+      auto opentherm_pid_output = new OpenthermFloatOutput();
+      openthermComp->set_pid_output(opentherm_pid_output);
+      App.register_component(opentherm_pid_output);     
+      return {opentherm_pid_output};
+    outputs:
+      id: pid_output
+
+sensor:
+  - platform: custom
+    lambda: |-    
+      OpenthermComponent *openthermComp = (OpenthermComponent*) id(opentherm);
+      return { 
+        openthermComp->boiler_temperature, 
+        openthermComp->return_temperature_sensor, 
+        openthermComp->pressure_sensor,
+        openthermComp->modulation_sensor,
+        openthermComp->heating_target_temperature_sensor
+      };
+    sensors:
+    - name: Boiler Temperature
+      unit_of_measurement: °C
+      accuracy_decimals: 1
+    - name: "Return Temperature"
+      unit_of_measurement: °C
+      accuracy_decimals: 1
+    - name: "Heating Water Pressure"
+      unit_of_measurement: hPa
+      accuracy_decimals: 1
+    - name: "Boiler Modulation"
+      unit_of_measurement: "%"
+      accuracy_decimals: 0
+    - name: "Heating Target Temperature"
+      unit_of_measurement: °C
+      accuracy_decimals: 1
+      
+
+# current temperature in each room
+  - platform: homeassistant
+    id: temperature_sensor_bathroom
+    entity_id: climate.bathroom_thermostat_2
+    attribute: current_temperature
+    name: "HA: Bathroom - Actual temperature"
+    unit_of_measurement: °C
+    internal: true
+
+  - platform: homeassistant
+    id: temperature_sensor_bedroom
+    entity_id: climate.bedroom_thermostat
+    attribute: current_temperature
+    name: "HA: Bedroom - Actual temperature"
+    unit_of_measurement: °C
+    internal: true
+
+  - platform: homeassistant
+    id: temperature_sensor_level3
+    entity_id: climate.level_3_thermostat
+    attribute: current_temperature
+    name: "HA: Level 3 - Actual temperature"
+    unit_of_measurement: °C
+    internal: true
+    
+  - platform: homeassistant
+    id: temperature_sensor_office
+    entity_id: climate.office_thermostat_2
+    attribute: current_temperature
+    name: "HA: Office - Actual temperature"
+    unit_of_measurement: °C
+    internal: true
+
+# control temperature in each room
+  - platform: homeassistant
+    id: set_temperature_sensor_bathroom
+    entity_id: climate.bathroom_thermostat_2
+    attribute: temperature
+    name: "HA: Bathroom - Control temperature"
+    unit_of_measurement: °C
+    internal: true
+
+  - platform: homeassistant
+    id: set_temperature_sensor_bedroom
+    entity_id: climate.bedroom_thermostat
+    attribute: temperature
+    name: "HA: Bedroom - Control temperature"
+    unit_of_measurement: °C
+    internal: true
+
+  - platform: homeassistant
+    id: set_temperature_sensor_level3
+    entity_id: climate.level_3_thermostat
+    attribute: temperature
+    name: "HA: Level 3 - Control temperature"
+    unit_of_measurement: °C
+    internal: true
+    
+  - platform: homeassistant
+    id: set_temperature_sensor_office
+    entity_id: climate.office_thermostat_2
+    attribute: temperature
+    name: "HA: Office - Control temperature"
+    unit_of_measurement: °C
+    internal: true
+
+
+# step to calculate the difference
+  - platform: template
+    id: temperature_sensor_interval
+    name: "Actual temperature interval"
+    lambda: |-
+      float t1 = id(temperature_sensor_bathroom).state;
+      float t2 = id(temperature_sensor_bedroom).state;
+      float t3 = id(temperature_sensor_level3).state;
+      float t4 = id(temperature_sensor_office).state;
+      float s1 = id(set_temperature_sensor_bathroom).state;
+      float s2 = id(set_temperature_sensor_bedroom).state;
+      float s3 = id(set_temperature_sensor_level3).state;
+      float s4 = id(set_temperature_sensor_office).state;               
+      std::string val1 = id(bathroom_thermostat_mode).state;
+      std::string val2 = id(bedroom_thermostat_mode).state;
+      std::string val3 = id(level3_thermostat_mode).state;
+      std::string val4 = id(office_thermostat_mode).state;                                     
+      float max = 0;
+      float t[4] = {t1, t2, t3, t4};     
+      float diff1 = s1-t1;
+      float diff2 = s2-t2;
+      float diff3 = s3-t3;
+      float diff4 = s4-t4;
+      int max_index = 0;
+      if (strcmp(val1.c_str(), "heating") == 0) { if (max < diff1) {max=diff1; max_index=1; } ;}
+      if (strcmp(val2.c_str(), "heating") == 0) { if (max < diff2) {max=diff2; max_index=2; } ;}
+      if (strcmp(val3.c_str(), "heating") == 0) { if (max < diff3) {max=diff3; max_index=3; } ;}
+      if (strcmp(val4.c_str(), "heating") == 0) { if (max < diff4) {max=diff4; max_index=4; } ;}                
+      ESP_LOGD("PID", "t1 = %f", t1) ;
+      ESP_LOGD("PID", "t2 = %f", t2) ;
+      ESP_LOGD("PID", "t3 = %f", t3) ;
+      ESP_LOGD("PID", "t4 = %f", t4) ;
+      ESP_LOGD("PID", "s1 = %f", s1) ;
+      ESP_LOGD("PID", "s2 = %f", s2) ;
+      ESP_LOGD("PID", "s3 = %f", s3) ;
+      ESP_LOGD("PID", "s4 = %f", s4) ;
+      ESP_LOGD("PID", "d1 = %f", diff1) ;
+      ESP_LOGD("PID", "d2 = %f", diff2) ;
+      ESP_LOGD("PID", "d3 = %f", diff3) ;
+      ESP_LOGD("PID", "d4 = %f", diff4) ;                
+      ESP_LOGD("PID", "max = %f", max) ;
+      ESP_LOGD("PID", "max index = %i", max_index) ;
+      ESP_LOGD("PWD", "t = {%f, %f, %f, %f", t[0], t[1], t[2], t[3] );
+      ESP_LOGD("PID", "result = %f", t[max_index-1]);          
+      return t[max_index-1];
+      return id(temperature_sensor_office).state;
+    update_interval: 1s
+    internal: true
+
+
+  - platform: pid
+    name: "PID Climate Result"
+    type: RESULT
+  - platform: pid
+    name: "Kp"
+    type: KP
+  - platform: pid
+    name: "Ki"
+    type: KI
+  - platform: pid
+    name: "Kd"
+    type: KD  
+
+# operating mode of each thermostat
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    internal: true
+
+  - platform: homeassistant
+    id: bathroom_thermostat_mode
+    entity_id: climate.bathroom_thermostat_2
+    attribute: hvac_action
+    name: "HA: Bathroom - Thermostat Mode"
+    internal: true
+    on_value:
+      if:
+        condition:
+          text_sensor.state:
+            id: bathroom_thermostat_mode
+            state: 'heating'
+        then:
+          - climate.control:
+              id: heating_water
+              mode: HEAT
+
+  - platform: homeassistant
+    id: bedroom_thermostat_mode
+    entity_id: climate.bedroom_thermostat
+    attribute: hvac_action
+    name: "HA: Bedroom - Thermostat Mode"
+    internal: true
+    on_value:
+      if:
+        condition:
+          text_sensor.state:
+            id: bedroom_thermostat_mode
+            state: 'heating'
+        then:
+          - climate.control:
+              id: heating_water
+              mode: HEAT
+
+  - platform: homeassistant
+    id: level3_thermostat_mode
+    entity_id: climate.level_3_thermostat
+    attribute: hvac_action
+    name: "HA: Level 3 - Thermostat Mode"
+    internal: true
+    on_value:
+      if:
+        condition:
+          text_sensor.state:
+            id: level3_thermostat_mode
+            state: 'heating'
+        then:
+          - climate.control:
+              id: heating_water
+              mode: HEAT
+
+  - platform: homeassistant
+    id: office_thermostat_mode
+    entity_id: climate.office_thermostat_2
+    attribute: hvac_action
+    name: "HA: Office - Thermostat Mode"
+    internal: true
+    on_value:
+      if:
+        condition:
+          text_sensor.state:
+            id: office_thermostat_mode
+            state: 'heating'
+        then:
+          - climate.control:
+              id: heating_water
+              mode: HEAT
+
+
+time:
+  - platform: homeassistant
+    on_time:
+      - seconds: 0
+        then:
+          if:
+            condition:
+              lambda: |-
+                std::string val1 = id(bathroom_thermostat_mode).state;
+                std::string val2 = id(bedroom_thermostat_mode).state;
+                std::string val3 = id(level3_thermostat_mode).state;
+                std::string val4 = id(office_thermostat_mode).state;                                          
+                float res = 0;
+                if (strcmp(val1.c_str(), "heating") == 0) {res += 1;}
+                if (strcmp(val2.c_str(), "heating") == 0) {res += 1;}
+                if (strcmp(val3.c_str(), "heating") == 0) {res += 1;}
+                if (strcmp(val4.c_str(), "heating") == 0) {res += 1;}
+                return res==0 ;
+            then:
+              - logger.log:
+                  format: Bring the boiler DOWN
+                  level: DEBUG
+              - climate.control:
+                  id: heating_water
+                  mode: "OFF"
+              - climate.control: 
+                  id: pid_climate
+                  mode: "OFF"
+      - seconds: 15
+        then:
+          - logger.log:
+              format: "Set a new setting point"
+              level: DEBUG          
+          - climate.control:
+              id: pid_climate
+              mode: "HEAT"
+              target_temperature: !lambda |-
+                float t1 = id(temperature_sensor_bathroom).state;
+                float t2 = id(temperature_sensor_bedroom).state;
+                float t3 = id(temperature_sensor_level3).state;
+                float t4 = id(temperature_sensor_office).state;
+                float s1 = id(set_temperature_sensor_bathroom).state;
+                float s2 = id(set_temperature_sensor_bedroom).state;
+                float s3 = id(set_temperature_sensor_level3).state;
+                float s4 = id(set_temperature_sensor_office).state;               
+                std::string val1 = id(bathroom_thermostat_mode).state;
+                std::string val2 = id(bedroom_thermostat_mode).state;
+                std::string val3 = id(level3_thermostat_mode).state;
+                std::string val4 = id(office_thermostat_mode).state;                                     
+                float max = 0;
+                float s[4] = {s1, s2, s3, s4};     
+                float diff1 = s1-t1;
+                float diff2 = s2-t2;
+                float diff3 = s3-t3;
+                float diff4 = s4-t4;
+                int max_index = 0;
+                if (strcmp(val1.c_str(), "heating") == 0) { if (max < diff1) {max=diff1; max_index=1; } ;}
+                if (strcmp(val2.c_str(), "heating") == 0) { if (max < diff2) {max=diff2; max_index=2; } ;}
+                if (strcmp(val3.c_str(), "heating") == 0) { if (max < diff3) {max=diff3; max_index=3; } ;}
+                if (strcmp(val4.c_str(), "heating") == 0) { if (max < diff4) {max=diff4; max_index=4; } ;}                
+                ESP_LOGD("PID", "t1 = %f", t1) ;
+                ESP_LOGD("PID", "t2 = %f", t2) ;
+                ESP_LOGD("PID", "t3 = %f", t3) ;
+                ESP_LOGD("PID", "t4 = %f", t4) ;
+                ESP_LOGD("PID", "s1 = %f", s1) ;
+                ESP_LOGD("PID", "s2 = %f", s2) ;
+                ESP_LOGD("PID", "s3 = %f", s3) ;
+                ESP_LOGD("PID", "s4 = %f", s4) ;
+                ESP_LOGD("PID", "d1 = %f", diff1) ;
+                ESP_LOGD("PID", "d2 = %f", diff2) ;
+                ESP_LOGD("PID", "d3 = %f", diff3) ;
+                ESP_LOGD("PID", "d4 = %f", diff4) ;                
+                ESP_LOGD("PID", "max = %f", max) ;
+                ESP_LOGD("PID", "max index = %i", max_index) ;
+                ESP_LOGD("PWD", "s = {%f, %f, %f, %f", s[0], s[1], s[2], s[3] );
+                ESP_LOGD("PID", "result = %f", s[max_index-1]);          
+                return s[max_index-1];
+
+binary_sensor:
+  - platform: custom
+    lambda: |-
+      OpenthermComponent *openthermComp = (OpenthermComponent*) id(opentherm);
+      return {openthermComp->flame};
+    binary_sensors:
+    - name: "Flame"
+      icon: mdi:fire
+
+switch:
+  - platform: custom
+    lambda: |-
+      OpenthermComponent *openthermComp = (OpenthermComponent*) id(opentherm);
+      return {openthermComp->thermostatSwitch};
+    switches:
+      name: "Disable PID"
+  - platform: template
+    name: "PID Climate Autotune"
+    turn_on_action:
+      - climate.pid.autotune: pid_climate      
+    internal: true
+        
+
+
+
+### CLIMATE COMPONENTS
+climate:
+
+  - platform: custom
+    lambda: |-
+      OpenthermComponent *openthermComp = (OpenthermComponent*) id(opentherm);
+      return {
+        openthermComp->hotWaterClimate, 
+        openthermComp->heatingWaterClimate
+      };
+    climates:
+      - id: hot_water
+        name: "Hot water"
+        internal: true
+        visual:
+          min_temperature: 60
+          max_temperature: 65
+          temperature_step:
+            target_temperature: 5
+            current_temperature: 1
+      - id: heating_water
+        name: "Heating water"
+        internal: false
+        visual:
+          min_temperature: 55
+          max_temperature: 70
+          temperature_step:
+            target_temperature: 5
+            current_temperature: 1
+
+            
+  - platform: pid
+    id: pid_climate
+    name: "PID Climate Controller"
+    visual:
+      min_temperature: 15 °C
+      max_temperature: 21 °C
+      temperature_step: 0.5 °C
+    sensor: temperature_sensor_interval
+    default_target_temperature: 19°C
+    heat_output: pid_output
+    control_parameters:
+      kp: 0.76394
+      ki: 0.00050
+      kd: 0
+      # kp: 0
+      # ki: 0
+      # kd: 0
+      output_averaging_samples: 10
+    # deadband_parameters: 
+    #   threshold_high: 0.5 °C
+    #   threshold_low: -0.5 °C
+    #   kp_multiplier: 0   # Added proportional gain since integral alone doesn't seem to fall fast enough when target is reached (but removed again after changing min feed temperature to 40 deg)
+    #   ki_multiplier: 0.15  # integral accumulates at only 20% of normal ki
+    #   kd_multiplier: 0.0   # derviative is turned off inside deadband
+    #   deadband_output_averaging_samples: 15
+    
+
+button:
+  - platform: restart
+    id: reboot
+    name: "reboot"
+    internal: true
